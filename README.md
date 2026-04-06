@@ -25,32 +25,15 @@ Original (top), VAE reconstruction (middle), and 5x-amplified difference (bottom
 
 ![Reconstruction comparison](docs/reconstruction_comparison.png)
 
-Side-by-side videos:
+Side-by-side video (original left, reconstruction right):
 
-<table>
-<tr>
-<td align="center"><b>Original</b></td>
-<td align="center"><b>VAE Reconstruction</b></td>
-</tr>
-<tr>
-<td>
-
-https://github.com/user-attachments/assets/recon_original.mp4
-
-<video src="docs/recon_original.mp4" width="256" autoplay loop muted></video>
-</td>
-<td>
-
-https://github.com/user-attachments/assets/recon_reconstructed.mp4
-
-<video src="docs/recon_reconstructed.mp4" width="256" autoplay loop muted></video>
-</td>
-</tr>
-</table>
+| Original | VAE Reconstruction |
+|:---:|:---:|
+| ![original](docs/recon_original.gif) | ![reconstruction](docs/recon_reconstructed.gif) |
 
 ### Frame-Budget Compression
 
-The encoder learns which frames are most important. We can compress by keeping only the top-K frames (by learned selection score) and replacing the rest with a fill token. The decoder then reconstructs the full video.
+The encoder learns which frames are most important. We can compress by keeping only the top-K frames (by learned selection score) and replacing the rest with a learned fill token. The decoder then reconstructs the full video.
 
 Compression of a 32-frame aerial coastal video:
 
@@ -68,32 +51,13 @@ Compression of a 32-frame aerial coastal video:
 
 *Each row shows 8 evenly-spaced frames from the 32-frame video. Top is original; subsequent rows show reconstruction with progressively fewer frames kept.*
 
-<table>
-<tr>
-<td align="center"><b>Original</b></td>
-<td align="center"><b>All 32 frames</b></td>
-<td align="center"><b>Top-8 frames</b></td>
-<td align="center"><b>Top-4 frames</b></td>
-</tr>
-<tr>
-<td><video src="docs/original_32f.mp4" width="200" autoplay loop muted></video></td>
-<td><video src="docs/recon_all_frames.mp4" width="200" autoplay loop muted></video></td>
-<td><video src="docs/recon_top8.mp4" width="200" autoplay loop muted></video></td>
-<td><video src="docs/recon_top4.mp4" width="200" autoplay loop muted></video></td>
-</tr>
-<tr>
-<td align="center"><b>Top-2 frames</b></td>
-<td align="center"><b>Top-1 frame</b></td>
-<td align="center"><b>Standard (3f)</b></td>
-<td></td>
-</tr>
-<tr>
-<td><video src="docs/recon_top2.mp4" width="200" autoplay loop muted></video></td>
-<td><video src="docs/recon_top1.mp4" width="200" autoplay loop muted></video></td>
-<td><video src="docs/recon_standard.mp4" width="200" autoplay loop muted></video></td>
-<td></td>
-</tr>
-</table>
+| Original | All 32 frames | Top-8 | Top-4 |
+|:---:|:---:|:---:|:---:|
+| ![](docs/original_32f.gif) | ![](docs/recon_all_frames.gif) | ![](docs/recon_top8.gif) | ![](docs/recon_top4.gif) |
+
+| Top-2 | Top-1 | Standard (3f) |
+|:---:|:---:|:---:|
+| ![](docs/recon_top2.gif) | ![](docs/recon_top1.gif) | ![](docs/recon_standard.gif) |
 
 ### Generated Video (DiT)
 
@@ -101,7 +65,7 @@ Compression of a 32-frame aerial coastal video:
 
 ![Generated video frames](docs/generated_grid.png)
 
-<video src="docs/generated_32f.mp4" width="256" autoplay loop muted></video>
+![Generated video](docs/generated_32f.gif)
 
 ---
 
@@ -225,7 +189,7 @@ python decompress.py --input compressed.pt --output reconstructed.mp4
 
 ```bash
 python evaluate.py
-# Outputs to docs/: images, comparison videos, eval_results.txt
+# Outputs to docs/: images, comparison GIFs, eval_results.txt
 ```
 
 ---

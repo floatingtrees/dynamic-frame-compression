@@ -24,8 +24,9 @@ comparison_frames/
 recon_frames/
 pipeline_frames/
 *.mp4
-# Allow docs videos
+# Allow docs assets
 !docs/*.mp4
+!docs/*.gif
 
 # IDE
 .vscode/
