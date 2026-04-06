@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Model weights (large binary files)
+*.pt
+*.pth
+*.ckpt
+
+# Temporary outputs
+generated_frames/
+jax_frames/
+comparison_frames/
+recon_frames/
+pipeline_frames/
+*.mp4
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
