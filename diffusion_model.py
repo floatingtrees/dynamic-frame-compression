@@ -3,6 +3,8 @@ PyTorch implementation of the Video Diffusion Transformer (DiT).
 Ported from JAX/Flax: /projects/video-VAE/diffusion/diffusion_model.py
 
 The DiT takes compressed VAE latents and denoises them using flow matching.
+It also predicts frame spacing (adjacent differences) that determine where
+each generated latent frame maps in the final output video.
 """
 
 import torch
@@ -52,7 +54,7 @@ class VideoDiT(nn.Module):
             time: (B, 1) timestep in [0, 1]
         Returns:
             latent_prediction: (B, T, hw, compressed_channel_dim)
-            spacing_prediction: (B, T)
+            spacing_prediction: (B, T) predicted frame gaps (adjacent differences)
         """
         compression_mask = rearrange(compression_mask, "b t -> b 1 1 t")
         timestep_weights = rearrange(self.timestep_proj(time), "b d -> b 1 1 d")
@@ -79,7 +81,7 @@ def sample(dit: VideoDiT, noise: torch.Tensor, compression_mask: torch.Tensor,
         num_steps: number of Euler integration steps
     Returns:
         x: (B, T, hw, d) denoised latent
-        selection_prediction: (B, T) predicted frame importance
+        selection_prediction: (B, T) predicted frame gaps (adjacent differences)
     """
     dt = 1.0 / num_steps
     x = noise
@@ -92,3 +94,42 @@ def sample(dit: VideoDiT, noise: torch.Tensor, compression_mask: torch.Tensor,
         x = x + velocity.to(x.dtype) * dt
 
     return x, selection_prediction
+
+
+def gaps_to_positions(gaps: torch.Tensor, mask: torch.Tensor):
+    """
+    Convert predicted frame gaps (adjacent differences) to absolute frame positions.
+
+    The DiT predicts gaps between consecutive selected frames:
+      gaps[0] = position of the first selected frame (>= 0)
+      gaps[i] = distance from frame i-1 to frame i (>= 1 for i > 0)
+
+    cumsum(gaps) gives absolute positions: [1, 2, 1] -> [1, 3, 4]
+
+    Args:
+        gaps: (B, T) raw float predictions from DiT
+        mask: (B, T) boolean indicating valid latent frames
+    Returns:
+        positions: (B, T) integer absolute frame positions
+        total_frames: (B,) integer total output video length per batch element
+    """
+    # Round to integers and enforce constraints
+    int_gaps = gaps.float().round().long()
+    # First gap: position of first frame (>= 0)
+    int_gaps[:, 0] = int_gaps[:, 0].clamp(min=0)
+    # Subsequent gaps: at least 1 apart
+    if int_gaps.shape[1] > 1:
+        int_gaps[:, 1:] = int_gaps[:, 1:].clamp(min=1)
+
+    # Zero out invalid positions
+    int_gaps = int_gaps * mask.long()
+
+    # Cumsum to get absolute positions
+    positions = torch.cumsum(int_gaps, dim=1)
+
+    # Total frames = position of last valid frame + 1
+    # Find last valid position per batch element
+    valid_positions = positions * mask.long()
+    total_frames = valid_positions.max(dim=1).values + 1
+
+    return positions, total_frames

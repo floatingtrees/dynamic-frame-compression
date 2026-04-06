@@ -241,50 +241,59 @@ class VideoVAE(nn.Module):
 
     def decompress(self, compressed: torch.Tensor, attention_mask: torch.Tensor,
                    selection_indices: torch.Tensor, compression_mask: torch.Tensor,
-                   train: bool = False):
+                   train: bool = False, output_length: int = None):
         """
         Decode compressed latent back to video.
-        Args:
-            compressed: (B, T, hw, d)
-            attention_mask: (B, 1, 1, T_orig)
-            selection_indices: (B, T) adjacent differences
-            compression_mask: (B, T) bool mask
-        Returns:
-            reconstruction: (B, T_orig, H, W, C)
-        """
-        b, t, hw, d = compressed.shape
-        fill = rearrange(self.fill_token, "1 1 1 d -> 1 1 d")
 
-        # Convert adjacent differences back to absolute indices
-        abs_indices = torch.cumsum(selection_indices, dim=1)
+        Scatters compressed latent frames to their correct temporal positions
+        (determined by cumsum of selection_indices) and fills gaps with the
+        learned fill_token before passing through the decoder.
+
+        Args:
+            compressed: (B, T_compressed, hw, d) left-packed latent frames
+            attention_mask: (B, 1, 1, T_out) mask for decoder attention
+            selection_indices: (B, T_compressed) adjacent differences (frame gaps)
+            compression_mask: (B, T_compressed) bool mask of valid entries
+            train: whether in training mode
+            output_length: explicit output temporal length. If None, inferred
+                           from cumsum of selection_indices (last valid position + 1).
+        Returns:
+            reconstruction: (B, T_out, H, W, C)
+        """
+        b, t_comp, hw, d = compressed.shape
+        fill = self.fill_token.view(1, d)  # (1, d) for broadcasting over hw
+        device = compressed.device
+
+        # Convert adjacent differences to absolute positions
+        abs_indices = torch.cumsum(selection_indices.long(), dim=1)
+
+        # Determine output length
+        if output_length is None:
+            # Infer from the last valid position
+            valid_pos = abs_indices * compression_mask.long()
+            output_length = int(valid_pos.max().item()) + 1
+
+        t_out = output_length
 
         result_list = []
         for bi in range(b):
-            result = fill.expand(t, hw, d).clone()
+            # Start with fill token everywhere: (t_out, hw, d)
+            result = fill.expand(hw, d).unsqueeze(0).expand(t_out, hw, d).clone()
             mask_b = compression_mask[bi]
             indices_b = abs_indices[bi]
 
-            for ti in range(t):
+            # Scatter valid compressed frames to their positions
+            for ti in range(t_comp):
                 if mask_b[ti]:
-                    idx = indices_b[ti].long()
-                    if idx < t:
+                    idx = int(indices_b[ti].item())
+                    if 0 <= idx < t_out:
                         result[idx] = compressed[bi, ti]
-
-            # Fill unset positions with fill_token
-            # Track which positions got data
-            full_mask = torch.zeros(t, device=compressed.device, dtype=torch.bool)
-            for ti in range(t):
-                if mask_b[ti]:
-                    idx = indices_b[ti].long()
-                    if idx < t:
-                        full_mask[idx] = True
-
-            for ti in range(t):
-                if not full_mask[ti]:
-                    result[ti] = fill.squeeze(0)
 
             result_list.append(result)
 
         full_representation = torch.stack(result_list)
-        reconstruction = self.decoder(full_representation, attention_mask, train=train)
+
+        # Build attention mask for the output length
+        attn_mask = torch.ones(b, 1, 1, t_out, dtype=torch.bool, device=device)
+        reconstruction = self.decoder(full_representation, attn_mask, train=train)
         return reconstruction

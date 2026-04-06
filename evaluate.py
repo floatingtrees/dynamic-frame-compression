@@ -16,7 +16,7 @@ import imageio.v2 as imageio
 from PIL import Image, ImageDraw, ImageFont
 
 from autoencoder import VideoVAE
-from diffusion_model import VideoDiT, sample
+from diffusion_model import VideoDiT, sample, gaps_to_positions
 
 
 DEVICE = "cuda"
@@ -107,40 +107,60 @@ def save_as_mp4(frames_01, path, fps=12):
 
 
 # ──────────────────────────────────────────────────────────────
-# 1. Generate 32-frame video from DiT
+# 1. Generate video from DiT with frame-gap prediction
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
-def generate_video_32(dit, vae):
-    print("\n=== Generating 32-frame videos (multiple seeds) ===")
+def generate_video(dit, vae, num_latent=16):
+    """Generate video using DiT + VAE with predicted frame gaps.
+
+    The DiT generates `num_latent` compressed latent frames and predicts
+    the spacing between them.  The VAE decoder scatters them to their
+    predicted positions and fills gaps with the learned fill token, so the
+    output length = sum(predicted_gaps) — no trailing black frames.
+    """
+    print(f"\n=== Generating videos ({num_latent} latent frames, multiple seeds) ===")
     best_video = None
     best_contrast = -1
     best_seed = 0
+    best_info = ""
 
     for seed in [0, 7, 13, 42, 99, 123, 256, 404, 512, 1024]:
         torch.manual_seed(seed)
-        noise = torch.randn(1, 32, 256, 96, device=DEVICE, dtype=torch.bfloat16)
-        mask = torch.ones(1, 32, dtype=torch.bool, device=DEVICE)
-        latent, _ = sample(dit, noise, mask, num_steps=100)
-        mask4d = torch.ones(1, 1, 1, 32, dtype=torch.bool, device=DEVICE)
-        video = vae.decoder(latent, mask4d, train=False)
-        # Model outputs [0,1] directly
+        noise = torch.randn(1, num_latent, 256, 96, device=DEVICE, dtype=torch.bfloat16)
+        mask = torch.ones(1, num_latent, dtype=torch.bool, device=DEVICE)
+        latent, gap_pred = sample(dit, noise, mask, num_steps=100)
+
+        positions, total_frames = gaps_to_positions(gap_pred, mask)
+        t_out = int(total_frames[0].item())
+        gaps_int = gap_pred.float().round().long()
+        gaps_int[:, 0] = gaps_int[:, 0].clamp(min=0)
+        if gaps_int.shape[1] > 1:
+            gaps_int[:, 1:] = gaps_int[:, 1:].clamp(min=1)
+        gaps_int = gaps_int * mask.long()
+
+        video = vae.decompress(latent, None, gaps_int, mask,
+                               train=False, output_length=t_out)
         video_np = np.clip(video[0].float().cpu().numpy(), 0, 1)
         contrast = video_np.std()
-        print(f"  seed={seed:4d}: std={contrast:.4f}, range=[{video_np.min():.3f}, {video_np.max():.3f}]")
+        info = (f"  seed={seed:4d}: {num_latent} latent -> {t_out} output frames, "
+                f"std={contrast:.4f}, gaps={gaps_int[0].tolist()}")
+        print(info)
         if contrast > best_contrast:
             best_contrast = contrast
             best_video = video_np
             best_seed = seed
+            best_info = info
 
     print(f"  Best seed: {best_seed} (std={best_contrast:.4f})")
 
     save_as_mp4(best_video, os.path.join(DOC_DIR, "generated_32f.mp4"), fps=12)
 
-    # Grid of every 4th frame
-    idx = list(range(0, 32, 4))
-    grid = make_grid([to_uint8(best_video[i]) for i in idx], nrow=8)
+    # Grid of evenly-spaced frames
+    n_show = min(8, best_video.shape[0])
+    idx = np.linspace(0, best_video.shape[0] - 1, n_show, dtype=int).tolist()
+    grid = make_grid([to_uint8(best_video[i]) for i in idx], nrow=n_show)
     imageio.imwrite(os.path.join(DOC_DIR, "generated_grid.png"), grid)
-    print(f"  Saved generated_grid.png")
+    print(f"  Saved generated_grid.png ({n_show} of {best_video.shape[0]} frames)")
     return best_video
 
 
@@ -328,7 +348,7 @@ def main():
     vae = load_vae()
     dit = load_dit()
 
-    gen_video = generate_video_32(dit, vae)
+    gen_video = generate_video(dit, vae, num_latent=16)
 
     video_path = "/mnt/t9/videos/videos1/mixkit_beach_mixkit-aerial-panorama-of-a-coast-and-its-reliefs-36615_000.mp4"
     if not os.path.exists(video_path):

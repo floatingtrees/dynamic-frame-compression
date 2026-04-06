@@ -59,9 +59,20 @@ Compression of a 32-frame aerial coastal video:
 |:---:|:---:|:---:|
 | ![](docs/recon_top2.gif) | ![](docs/recon_top1.gif) | ![](docs/recon_standard.gif) |
 
-### Generated Video (DiT)
+### Generated Video (DiT + Frame Gap Prediction)
 
-32-frame video generated from noise (100 Euler flow-matching steps). Every 4th frame shown:
+The DiT generates compressed latent frames **and** predicts the temporal spacing between them. The predicted gaps determine where each latent frame maps in the output video; the VAE decoder fills the gaps with a learned fill token. This means the output video length is determined by the model (`total_frames = sum(gaps)`), not set manually — so there are no trailing blank frames.
+
+Example with 16 latent frames, seed 256:
+```
+Predicted gaps:   [1, 5, 4, 3, 4, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1]
+Frame positions:  [1, 6, 10, 13, 17, 20, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+Output length:    33 frames (from 16 latent frames)
+```
+
+The model learned to space early frames further apart (gaps of 3–5) and pack later frames tightly (gaps of 1), allocating more detail to the end of the sequence.
+
+Evenly-sampled frames from the 33-frame output:
 
 ![Generated video frames](docs/generated_grid.png)
 
@@ -82,7 +93,8 @@ Compression of a 32-frame aerial coastal video:
 - 30 FactoredAttention layers with residual_dim=1024
 - Flow matching with Euler integration (continuous timesteps in [0,1])
 - Timestep conditioning via zero-initialized linear projection
-- Predicts both velocity field and frame spacing scores
+- **Dual-head output**: predicts the denoised latent (velocity field) **and** frame gaps (adjacent differences between selected frame positions)
+- Frame gaps determine output video length: `total_frames = sum(gaps)`. Early gaps tend to be larger (sparse coverage of slow motion), later gaps tend to be 1 (dense detail)
 - Operates on compressed VAE latents (96-dim)
 
 ### 3D UNet (Decoder Refinement)
@@ -163,12 +175,14 @@ The conversion handles:
 
 ### Generate Video
 
+The DiT predicts both latent frames and their temporal spacing. Output length is determined automatically from the predicted frame gaps.
+
 ```bash
-# 32 frames, 100 Euler steps, bfloat16
-python generate.py --num_frames 32 --num_steps 100 --seed 256 --output generated.mp4
+# Generate from 16 latent frames (output length determined by model)
+python generate.py --num_latent_frames 16 --num_steps 100 --seed 256 --output generated.mp4
 
 # Save individual frames as PNGs
-python generate.py --num_frames 16 --num_steps 100 --output video.mp4 --save_frames frames/
+python generate.py --num_latent_frames 16 --num_steps 100 --output video.mp4 --save_frames frames/
 ```
 
 ### Compress a Video
