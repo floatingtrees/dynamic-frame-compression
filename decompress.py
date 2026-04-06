@@ -60,9 +60,8 @@ def decompress_video(vae: VideoVAE, compressed_data: dict,
                            compression_mask, train=False)
 
     # (1, T, H, W, C) -> (T, H, W, C)
+    # Model outputs in [0, 1] range directly
     video_np = video[0].cpu().float().numpy()
-    # Convert from model range to [0, 1]
-    video_np = (video_np + 1.0) / 2.0
     return video_np
 
 

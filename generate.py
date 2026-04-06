@@ -107,13 +107,8 @@ def generate(dit: VideoDiT, vae: VideoVAE, num_frames: int = 16,
     print(f"  Video shape: {video.shape}")
 
     # Convert to numpy: (1, T, H, W, C) -> (T, H, W, C)
+    # Model outputs in [0, 1] range directly (trained on [0,1] pixel values)
     video_np = video[0].cpu().float().numpy()
-
-    # Normalize to [0, 1] range
-    # The model outputs values in roughly [-1, 1] range
-    # We shift and scale to [0, 1]
-    video_np = (video_np + 1.0) / 2.0
-
     print(f"  Output range: [{video_np.min():.3f}, {video_np.max():.3f}]")
     return video_np
 

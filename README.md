@@ -14,42 +14,94 @@ All inference runs in **bfloat16** for efficient GPU usage.
 
 ### Autoencoder Reconstruction Quality
 
-The VAE encodes 256x256 video frames into a compressed latent space (8x spatial compression: 768 -> 96 channels) and reconstructs them. Evaluated on 50 real videos from the training set:
+The VAE encodes 256x256 video frames into a compact latent space (8x spatial compression: 768 -> 96 channels) and reconstructs them. Evaluated on 50 real videos:
 
 | Metric | Value |
 |--------|-------|
-| Mean MSE | 0.0886 |
-| Mean MAE | 0.2751 |
+| **Mean MSE** | **0.0025** |
+| Mean MAE | 0.0389 |
 
-Below: original frames (top), VAE reconstruction (middle), and 5x-amplified difference (bottom).
+Original (top), VAE reconstruction (middle), and 5x-amplified difference (bottom):
 
 ![Reconstruction comparison](docs/reconstruction_comparison.png)
 
+Side-by-side videos:
+
+<table>
+<tr>
+<td align="center"><b>Original</b></td>
+<td align="center"><b>VAE Reconstruction</b></td>
+</tr>
+<tr>
+<td>
+
+https://github.com/user-attachments/assets/recon_original.mp4
+
+<video src="docs/recon_original.mp4" width="256" autoplay loop muted></video>
+</td>
+<td>
+
+https://github.com/user-attachments/assets/recon_reconstructed.mp4
+
+<video src="docs/recon_reconstructed.mp4" width="256" autoplay loop muted></video>
+</td>
+</tr>
+</table>
+
 ### Frame-Budget Compression
 
-The model learns which frames are most important and can compress a video by keeping only a subset of frames. Unselected frames are replaced with a learned fill token, then the decoder reconstructs the full video.
+The encoder learns which frames are most important. We can compress by keeping only the top-K frames (by learned selection score) and replacing the rest with a fill token. The decoder then reconstructs the full video.
 
-Here we compress a 32-frame aerial coastal video, keeping the top-K most important frames (by the encoder's learned selection scores), and compare reconstruction quality:
+Compression of a 32-frame aerial coastal video:
 
-| Frames Kept | MSE | Compression |
+| Frames Kept | MSE | Spatial+Temporal Compression |
 |-------------|---------|-------------|
-| 32 (all) | 0.1224 | 1x (baseline) |
-| 16 | 0.1246 | 2x |
-| 8 | 0.1248 | 4x |
-| 4 | 0.1279 | 8x |
-| 2 | 0.1285 | 16x |
-| 1 | 0.1190 | 32x |
-| Standard (p>0.5) | 0.1276 | ~11x (3 frames) |
+| 32 (all) | 0.0025 | 8x (spatial only) |
+| 16 | 0.0038 | 16x |
+| 8 | 0.0037 | 32x |
+| 4 | 0.0048 | 64x |
+| 2 | 0.0063 | 128x |
+| 1 | 0.0031 | 256x |
+| Standard (p>0.5, 3f) | 0.0053 | ~85x |
 
 ![Compression comparison](docs/compression_comparison.png)
 
-*Each row shows 8 evenly-spaced frames from the 32-frame video. Top row is the original; subsequent rows show reconstruction quality as fewer frames are kept.*
+*Each row shows 8 evenly-spaced frames from the 32-frame video. Top is original; subsequent rows show reconstruction with progressively fewer frames kept.*
 
-### Generated Video
+<table>
+<tr>
+<td align="center"><b>Original</b></td>
+<td align="center"><b>All 32 frames</b></td>
+<td align="center"><b>Top-8 frames</b></td>
+<td align="center"><b>Top-4 frames</b></td>
+</tr>
+<tr>
+<td><video src="docs/original_32f.mp4" width="200" autoplay loop muted></video></td>
+<td><video src="docs/recon_all_frames.mp4" width="200" autoplay loop muted></video></td>
+<td><video src="docs/recon_top8.mp4" width="200" autoplay loop muted></video></td>
+<td><video src="docs/recon_top4.mp4" width="200" autoplay loop muted></video></td>
+</tr>
+<tr>
+<td align="center"><b>Top-2 frames</b></td>
+<td align="center"><b>Top-1 frame</b></td>
+<td align="center"><b>Standard (3f)</b></td>
+<td></td>
+</tr>
+<tr>
+<td><video src="docs/recon_top2.mp4" width="200" autoplay loop muted></video></td>
+<td><video src="docs/recon_top1.mp4" width="200" autoplay loop muted></video></td>
+<td><video src="docs/recon_standard.mp4" width="200" autoplay loop muted></video></td>
+<td></td>
+</tr>
+</table>
 
-32-frame video generated from noise using the DiT (100 Euler steps) + VAE decoder. Every 4th frame shown:
+### Generated Video (DiT)
+
+32-frame video generated from noise (100 Euler flow-matching steps). Every 4th frame shown:
 
 ![Generated video frames](docs/generated_grid.png)
+
+<video src="docs/generated_32f.mp4" width="256" autoplay loop muted></video>
 
 ---
 
@@ -88,9 +140,9 @@ dynamic-frame-compression/
 ├── generate.py               # Video generation (DiT + VAE decode)
 ├── compress.py               # Video compression (VAE encode)
 ├── decompress.py             # Video decompression (VAE decode)
-├── evaluate.py               # Evaluation & documentation image generation
+├── evaluate.py               # Evaluation & documentation image/video generation
 ├── test_jax_vs_pytorch.py    # JAX vs PyTorch correctness tests
-└── docs/                     # Generated documentation images
+└── docs/                     # Generated documentation images and videos
 ```
 
 ---
@@ -173,45 +225,34 @@ python decompress.py --input compressed.pt --output reconstructed.mp4
 
 ```bash
 python evaluate.py
-# Outputs to docs/: generated_grid.png, compression_comparison.png, reconstruction_comparison.png
+# Outputs to docs/: images, comparison videos, eval_results.txt
 ```
 
 ---
 
 ## Correctness Verification
 
-All model outputs match JAX within 1e-3 (tested with TF32 disabled):
+All model outputs match JAX within **1e-3** (tested with TF32 disabled):
 
 ```bash
 NVIDIA_TF32_OVERRIDE=0 python test_jax_vs_pytorch.py
 ```
 
 ```
-=== Testing VAE Encoder ===
-  [PASS] encoder mean:       max_diff=2.12e-05
-  [PASS] encoder variance:   max_diff=9.91e-07
-  [PASS] encoder selection:  max_diff=5.66e-06
-
-=== Testing VAE Decoder ===
-  [PASS] decoder output:     max_diff=4.17e-07
-
-=== Testing DiT Forward ===
-  [PASS] dit latent:         max_diff=1.62e-05
-  [PASS] dit spacing:        max_diff=9.54e-06
-
-=== Testing DiT Sampling (100 steps) ===
-  [PASS] sampling output:    max_diff=8.85e-04
-
-=== Testing Full Pipeline (DiT -> VAE Decode) ===
-  [PASS] video output:       max_diff=1.32e-04
-
-All tests PASSED!
+VAE Encoder mean:       max_diff = 2.12e-05  PASS
+VAE Encoder variance:   max_diff = 9.91e-07  PASS
+VAE Encoder selection:  max_diff = 5.66e-06  PASS
+VAE Decoder output:     max_diff = 4.17e-07  PASS
+DiT forward latent:     max_diff = 1.62e-05  PASS
+DiT forward spacing:    max_diff = 9.54e-06  PASS
+DiT sampling (100 steps): max_diff = 8.85e-04  PASS
+Full pipeline video:    max_diff = 1.32e-04  PASS
 ```
 
-Key conversion details that were required for correctness:
-- **LayerNorm epsilon**: Flax defaults to `1e-6`, PyTorch defaults to `1e-5`
-- **ConvTranspose3d kernel flip**: Flax's `lax.conv_transpose` flips the kernel internally; the conversion compensates
-- **TF32 matmul**: JAX enables TF32 by default on GPU, reducing float32 matmul precision
+Key conversion details required for correctness:
+- **LayerNorm/GroupNorm epsilon**: Flax defaults to `1e-6`, PyTorch defaults to `1e-5`
+- **ConvTranspose3d kernel flip**: Flax's `lax.conv_transpose` flips the kernel internally
+- **Model pixel range**: The model operates in **[0, 1]** pixel space (not [-1, 1])
 
 ---
 

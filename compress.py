@@ -41,8 +41,8 @@ def load_video(path: str, max_frames: int = 32, resize: tuple = (256, 256)) -> n
     reader.close()
 
     video = np.stack(frames, axis=0).astype(np.float32)
-    # Normalize from [0, 255] to [-1, 1]
-    video = video / 127.5 - 1.0
+    # Normalize from [0, 255] to [0, 1] (model expects [0,1])
+    video = video / 255.0
     # Add batch dimension
     video = video[np.newaxis]  # (1, T, H, W, C)
     return video

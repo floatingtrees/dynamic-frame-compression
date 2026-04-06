@@ -1,10 +1,10 @@
-Mean MSE: 0.088635
-Mean MAE: 0.275077
+Mean MSE: 0.002511
+Mean MAE: 0.038889
 Num videos: 50
-Compression all: MSE=0.122447, kept=32
-Compression 16: MSE=0.124590, kept=16
-Compression 8: MSE=0.124786, kept=8
-Compression 4: MSE=0.127900, kept=4
-Compression 2: MSE=0.128469, kept=2
-Compression 1: MSE=0.118953, kept=1
-Compression standard: MSE=0.127569, kept=3
+Compression all: MSE=0.002492, kept=32
+Compression 16: MSE=0.003799, kept=16
+Compression 8: MSE=0.003693, kept=8
+Compression 4: MSE=0.004814, kept=4
+Compression 2: MSE=0.006316, kept=2
+Compression 1: MSE=0.003087, kept=1
+Compression standard: MSE=0.005343, kept=3
