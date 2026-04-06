@@ -37,7 +37,7 @@ The Bernoulli-sampled MSE uses the model's learned frame selection at inference 
 
 The encoder assigns each frame an importance score. We can keep only the top-K frames and fill the rest with a learned token, compressing at arbitrary temporal ratios on top of the 8x spatial compression.
 
-Shown on 16-frame clips: Original | All frames | Sampled (standard Bernoulli) | Top-8 | Top-4 | Top-1
+Shown on 32-frame clips: Original | Top-16 | Top-8 | Top-4 | Top-1
 
 ![Seascape](docs/compress_video0.gif)
 
@@ -61,7 +61,7 @@ Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 
 ![4x4 generation grid](docs/generated_grid.gif)
 
-*16 seeds, 8 latent frames each. Labels show seed and output frame count (28–33 frames).*
+*25 seeds, 8 latent frames each. Labels show seed and output frame count (28–33 frames).*
 
 ---
 

@@ -234,7 +234,7 @@ def reconstruction_demos(vae, video_paths):
 # 3. Compression demos with standard Bernoulli mode
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
-def compression_demos(vae, video_paths, max_frames=16):
+def compression_demos(vae, video_paths, max_frames=32):
     print(f"\n=== Compression demos ({len(video_paths)} videos, {max_frames} frames) ===")
     font = get_font(10)
 
@@ -243,6 +243,7 @@ def compression_demos(vae, video_paths, max_frames=16):
         if video_01 is None:
             continue
         T = video_01.shape[0]
+        half = T // 2
         video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
         mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
 
@@ -251,25 +252,17 @@ def compression_demos(vae, video_paths, max_frames=16):
         fill = vae.fill_token.to(torch.bfloat16)
         sel = selection_probs.squeeze(-1).squeeze(0).float().cpu().numpy()
 
-        # All frames
-        recon_all = vae.decoder(latent, mask4d, train=False)
-        recon_all_np = np.clip(recon_all[0].float().cpu().numpy(), 0, 1)
-        mse_all = float(np.mean((video_01 - recon_all_np) ** 2))
-
-        # Standard Bernoulli (training-time behavior)
-        torch.manual_seed(vi * 1000)
-        sel_mask_b = torch.bernoulli(selection_probs.squeeze(-1)).to(torch.bfloat16)
-        kept_b = int(sel_mask_b.sum().item())
-        sel_mask_b4 = sel_mask_b.unsqueeze(-1).unsqueeze(-1)
-        compressed_b = latent * sel_mask_b4 + fill * (1 - sel_mask_b4)
-        recon_b = vae.decoder(compressed_b, mask4d, train=False)
-        recon_b_np = np.clip(recon_b[0].float().cpu().numpy(), 0, 1)
-        mse_b = float(np.mean((video_01 - recon_b_np) ** 2))
+        # Half frames baseline (top-half by selection score)
+        topk_half = np.sort(np.argsort(sel)[-half:])
+        sm_half = torch.zeros(1, T, 1, 1, device=DEVICE, dtype=torch.bfloat16)
+        sm_half[0, topk_half, 0, 0] = 1.0
+        recon_half = vae.decoder(latent * sm_half + fill * (1 - sm_half), mask4d, train=False)
+        recon_half_np = np.clip(recon_half[0].float().cpu().numpy(), 0, 1)
+        mse_half = float(np.mean((video_01 - recon_half_np) ** 2))
 
         parts = [
             label_video(video_01, "Original", font),
-            label_video(recon_all_np, f"All {T}f MSE={mse_all:.4f}", font),
-            label_video(recon_b_np, f"Sampled {kept_b}f MSE={mse_b:.4f}", font),
+            label_video(recon_half_np, f"Top-{half} MSE={mse_half:.4f}", font),
         ]
 
         # Argmax budgets
@@ -286,7 +279,7 @@ def compression_demos(vae, video_paths, max_frames=16):
         out_path = os.path.join(DOC_DIR, f"compress_video{vi}.gif")
         save_gif(composite, out_path, fps=12)
         shrink_gif(out_path)
-        print(f"  compress_video{vi}.gif: {label}, Bernoulli kept={kept_b}/{T}")
+        print(f"  compress_video{vi}.gif: {label}, half={half}/{T}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -294,9 +287,11 @@ def compression_demos(vae, video_paths, max_frames=16):
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
 def generate_grid(dit, vae, num_latent=8):
-    print(f"\n=== Generating 4x4 grid ({num_latent} latent frames per video) ===")
+    print(f"\n=== Generating 5x5 grid ({num_latent} latent frames per video) ===")
     font = get_font(10)
-    seeds = [0, 7, 13, 42, 55, 99, 123, 200, 256, 333, 404, 512, 700, 888, 1024, 1337]
+    seeds = [0, 7, 13, 42, 55, 77, 99, 123, 200, 256,
+             333, 404, 512, 600, 700, 777, 888, 999, 1024, 1111,
+             1337, 1500, 1776, 2000, 2025]
 
     rows = []
     row_vids = []
@@ -321,14 +316,14 @@ def generate_grid(dit, vae, num_latent=8):
         row_vids.append(v_labeled)
         print(f"  seed={seed:4d}: {t_out} frames")
 
-        if len(row_vids) == 4:
+        if len(row_vids) == 5:
             rows.append(hstack_videos(row_vids, pad=2))
             row_vids = []
 
     composite = vstack_videos(rows, pad=2)
     out_path = os.path.join(DOC_DIR, "generated_grid.gif")
     save_gif(composite, out_path, fps=12)
-    shrink_gif(out_path, scale="iw*2/3", max_colors=64)
+    shrink_gif(out_path, scale="iw*3/5", max_colors=64)
     print(f"  Saved generated_grid.gif")
 
 
@@ -356,7 +351,7 @@ def main():
         ("/projects/video-VAE/inference/test_videos/videos0/videos0/9bZkp7q19f0.mp4", 300, "dance (high motion)"),
         ("/projects/video-VAE/inference/test_videos/videos0/videos0/dQw4w9WgXcQ.mp4", 600, "music video (high motion)"),
     ]
-    compression_demos(vae, compress_paths, max_frames=16)
+    compression_demos(vae, compress_paths, max_frames=32)
 
     # --- DiT ---
     generate_grid(dit, vae, num_latent=8)
