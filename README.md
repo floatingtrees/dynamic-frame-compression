@@ -2,45 +2,61 @@
 
 PyTorch port of a JAX/Flax video generation and compression system combining a **Video VAE** (Variational Autoencoder) with a **Video DiT** (Diffusion Transformer).
 
-- **Video generation** from noise using flow-matching diffusion with learned frame spacing
 - **Video compression** via learned frame selection + spatial compression (up to 256x)
-- **Video decompression** back to pixel space
+- **Video generation** from noise using flow-matching diffusion with learned frame spacing
 
-All inference runs in **bfloat16**.
+All inference runs in **bfloat16**. Both models were trained for 10 days on 32 Google TPU v6e chips.
 
 ---
 
-## Results
+## VAE Results
 
-### Video Generation (DiT + Frame Gap Prediction)
+### Reconstruction Quality
 
-The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is scattered to its predicted position in the output; gaps are filled by the VAE's learned fill token. Output length is `sum(predicted_gaps)` — determined by the model, not set manually.
+The VAE encodes 256x256 video into a compact latent (8x spatial compression: 768→96 channels per patch) and reconstructs it. Averaged over **600 real videos**:
 
-Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames at positions `[2,8,14,17,22,24,26,30]`.
+| Metric | Value |
+|--------|-------|
+| **Mean MSE** | **0.0026** |
+| Std MSE | 0.0029 |
 
-![Generated videos](docs/generated_composite.gif)
+![Aerial coast](docs/recon_video0.gif)
 
-*Four different seeds, each generating 29–31 frames from 8 latent frames.*
+![Beach jumping](docs/recon_video1.gif)
 
-### Autoencoder Reconstruction
+![Dance — high motion](docs/recon_video2.gif)
 
-The VAE reconstructs 256x256 video with **MSE 0.0025** (averaged over 50 real videos).
-
-![Reconstruction](docs/recon_video0.gif)
-
-![Reconstruction](docs/recon_video1.gif)
-
-![Reconstruction](docs/recon_video2.gif)
+![Music video — high motion](docs/recon_video3.gif)
 
 ### Frame-Budget Compression
 
-The encoder assigns each frame an importance score. By keeping only the top-K frames and filling the rest with a learned token, the model compresses video at arbitrary ratios. Shown: Original → All frames → Top-8 → Top-4 → Top-1.
+The encoder assigns each frame an importance score. By keeping only the top-K frames and filling the rest with a learned token, the model compresses video at arbitrary temporal ratios on top of the 8x spatial compression.
 
-![Compression: seascapes](docs/compress_video0.gif)
+Shown: Original | All 32 frames | Top-8 | Top-4 | Top-1
 
-![Compression: forest](docs/compress_video1.gif)
+![Seascape](docs/compress_video0.gif)
 
-![Compression: beach aerial](docs/compress_video2.gif)
+![Palm beach aerial](docs/compress_video1.gif)
+
+![Dance — high motion](docs/compress_video2.gif)
+
+![Music video — high motion](docs/compress_video3.gif)
+
+*High-motion videos (dance, music video) degrade more with fewer frames, as expected — temporal information is harder to reconstruct from a single keyframe.*
+
+---
+
+## DiT Results
+
+### Video Generation with Frame Gap Prediction
+
+The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is placed at its predicted position; the VAE fills gaps with a learned token. Output length = `sum(predicted_gaps)`.
+
+Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
+
+![4x4 generation grid](docs/generated_grid.gif)
+
+*16 seeds, 8 latent frames each. Labels show seed and output frame count (28–33 frames). The model generates diverse scenes: animals, water, landscapes, people, close-ups.*
 
 ---
 
@@ -50,13 +66,13 @@ The encoder assigns each frame an importance score. By keeping only the top-K fr
 - **Encoder**: 16x16 PatchEmbed → 9 FactoredAttention layers → spatial compression (768→96) + frame selection head
 - **Decoder**: Spatial decompression (96→768) → 12 FactoredAttention layers → PatchUnEmbed + 3D UNet refinement
 - **FactoredAttention**: Temporal attention+MLP, then spatial attention+MLP, with RoPE and QK-norm
-- **Frame selection**: Learned per-frame importance scores; unselected frames replaced by a learned fill token
+- **Frame selection**: Learned per-frame importance; unselected frames replaced by a learned fill token
 
 ### Video DiT
 - 30 FactoredAttention layers, residual_dim=1024
-- Flow matching with Euler integration (continuous timesteps in [0,1])
-- **Dual-head output**: velocity field (for denoising) **and** frame gaps (adjacent differences between frame positions)
-- Frame gaps determine output length: early gaps are larger (sparse), later gaps are smaller (dense), reflecting learned temporal attention allocation
+- Flow matching with Euler integration (continuous timesteps [0,1])
+- **Dual-head output**: velocity field (denoising) + frame gaps (temporal spacing)
+- Gaps determine output length — no trailing blank frames
 
 ### 3D UNet (Decoder Refinement)
 - 3-level encoder-decoder with skip connections and 3D convolutions
@@ -70,7 +86,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install einops imageio imageio-ffmpeg pillow
 
-# Optional: JAX for comparison tests
+# Optional: JAX comparison tests
 pip install "jax[cuda12]" "flax==0.10.4" optax orbax-checkpoint beartype jaxtyping
 ```
 
@@ -92,8 +108,6 @@ python convert_weights.py --model dit \
 
 ### Generate Video
 
-Output length is determined by the model's predicted frame gaps.
-
 ```bash
 python generate.py --num_latent_frames 8 --num_steps 100 --seed 256 --output generated.mp4
 ```
@@ -108,7 +122,7 @@ python decompress.py --input compressed.pt --output reconstructed.mp4
 ### Evaluate
 
 ```bash
-python evaluate.py  # generates all docs/ assets
+python evaluate.py  # regenerates all docs/ assets
 ```
 
 ---
@@ -117,7 +131,7 @@ python evaluate.py  # generates all docs/ assets
 
 All outputs match JAX within **1e-3** (TF32 disabled):
 
-```bash
+```
 NVIDIA_TF32_OVERRIDE=0 python test_jax_vs_pytorch.py
 ```
 
@@ -129,7 +143,7 @@ NVIDIA_TF32_OVERRIDE=0 python test_jax_vs_pytorch.py
 | DiT Sampling (100 steps) | 8.9e-04 |
 | Full Pipeline | 1.3e-04 |
 
-Key conversion details: LayerNorm eps 1e-6 (not 1e-5), ConvTranspose3d kernel flip, model uses [0,1] pixel range.
+Key details: LayerNorm/GroupNorm eps=1e-6, ConvTranspose3d kernel flip, model uses [0,1] pixel range.
 
 ---
 

@@ -1,9 +1,8 @@
 """
 Evaluation script for README documentation.
-- Generate videos from DiT with frame-gap prediction
-- Compress real videos at different frame budgets
-- Compute MSE over real videos
-- Produce comparison videos (GIF) for the README
+- Autoencoder reconstruction quality on 500+ real videos
+- Compression at different frame budgets on diverse videos
+- Video generation from DiT with frame-gap prediction (4x4 grid)
 """
 
 import os
@@ -54,30 +53,42 @@ def get_font(size=14):
     return ImageFont.load_default()
 
 
-def load_video(path, max_frames=32, resize=(256, 256)):
+def load_video(path, max_frames=32, resize=(256, 256), start_frame=0):
     reader = imageio.get_reader(path)
     frames = []
     for i, frame in enumerate(reader):
-        if i >= max_frames:
+        if i < start_frame:
+            continue
+        if len(frames) >= max_frames:
             break
         if frame.shape[0] != resize[0] or frame.shape[1] != resize[1]:
             img = Image.fromarray(frame).resize((resize[1], resize[0]), Image.LANCZOS)
             frame = np.array(img)
         frames.append(frame)
     reader.close()
+    if len(frames) == 0:
+        return None
     return np.stack(frames).astype(np.float32) / 255.0
 
 
 def save_gif(frames_01, path, fps=12):
-    """Save (T,H,W,3) float [0,1] as looping GIF."""
     frames_u8 = [to_uint8(f) for f in frames_01]
-    imageio.mimwrite(path, frames_u8, format="GIF", duration=1000/fps, loop=0)
+    imageio.mimwrite(path, frames_u8, format="GIF", duration=1000 / fps, loop=0)
 
 
-def hstack_videos(videos_01, pad=4):
-    """Horizontally stack a list of (T,H,W,3) videos (same T,H), return (T,H,W_total,3)."""
+def shrink_gif(path, scale="iw*3/4", max_colors=64):
+    """Re-encode a GIF smaller via ffmpeg palette optimization."""
+    tmp = path + ".tmp.gif"
+    os.system(f'ffmpeg -y -i "{path}" -vf "fps=8,scale={scale}:-1:flags=lanczos,'
+              f'split[s0][s1];[s0]palettegen=max_colors={max_colors}[p];'
+              f'[s1][p]paletteuse=dither=bayer:bayer_scale=3" -loop 0 "{tmp}" 2>/dev/null')
+    if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+        os.replace(tmp, path)
+
+
+def hstack_videos(videos_01, pad=2):
     T = min(v.shape[0] for v in videos_01)
-    out_frames = []
+    out = []
     for t in range(T):
         row = [to_uint8(v[t]) for v in videos_01]
         sep = np.full((row[0].shape[0], pad, 3), 255, dtype=np.uint8)
@@ -86,42 +97,163 @@ def hstack_videos(videos_01, pad=4):
             if i > 0:
                 parts.append(sep)
             parts.append(r)
-        out_frames.append(np.concatenate(parts, axis=1))
-    return np.stack(out_frames).astype(np.float32) / 255.0
+        out.append(np.concatenate(parts, axis=1))
+    return np.stack(out).astype(np.float32) / 255.0
+
+
+def vstack_videos(videos_01, pad=2):
+    T = min(v.shape[0] for v in videos_01)
+    out = []
+    for t in range(T):
+        col = [to_uint8(v[t]) for v in videos_01]
+        sep = np.full((pad, col[0].shape[1], 3), 255, dtype=np.uint8)
+        parts = []
+        for i, c in enumerate(col):
+            if i > 0:
+                parts.append(sep)
+            parts.append(c)
+        out.append(np.concatenate(parts, axis=0))
+    return np.stack(out).astype(np.float32) / 255.0
 
 
 def label_frame(frame_u8, text, font):
-    """Add a text label on top of a uint8 frame."""
     img = Image.fromarray(frame_u8)
     draw = ImageDraw.Draw(img)
-    draw.rectangle([(0, 0), (img.width, 18)], fill=(0, 0, 0))
-    draw.text((4, 1), text, fill=(255, 255, 255), font=font)
+    draw.rectangle([(0, 0), (img.width, 16)], fill=(0, 0, 0))
+    draw.text((3, 0), text, fill=(255, 255, 255), font=font)
     return np.array(img)
 
 
 def label_video(frames_01, text, font):
-    """Add persistent label to all frames of a video."""
-    out = []
-    for f in frames_01:
-        out.append(label_frame(to_uint8(f), text, font).astype(np.float32) / 255.0)
-    return np.stack(out)
+    return np.stack([label_frame(to_uint8(f), text, font).astype(np.float32) / 255.0
+                     for f in frames_01])
 
 
 # ──────────────────────────────────────────────────────────────
-# 1. Generate videos with frame-gap prediction
+# 1. MSE over 500+ real videos
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
-def generate_videos(dit, vae, num_latent=8):
-    print(f"\n=== Generating videos ({num_latent} latent frames) ===")
-    font = get_font(12)
-    all_videos = []
+def evaluate_mse(vae, video_dir, num_videos=600, max_frames=32):
+    print(f"\n=== Evaluating autoencoder MSE on {num_videos} videos ===")
+    paths = sorted(glob.glob(os.path.join(video_dir, "*.mp4")))[:num_videos]
 
-    for seed in [0, 42, 99, 256]:
+    all_mse = []
+    for idx, path in enumerate(paths):
+        video_01 = load_video(path, max_frames=max_frames)
+        if video_01 is None or video_01.shape[0] < 2:
+            continue
+        T = video_01.shape[0]
+        video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
+        mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
+        mean, _, _ = vae.encoder(video_t, mask4d, train=False)
+        recon = vae.decoder(mean, mask4d, train=False)
+        recon_np = np.clip(recon[0].float().cpu().numpy(), 0, 1)
+        mse = float(np.mean((video_01 - recon_np) ** 2))
+        all_mse.append(mse)
+        if (idx + 1) % 100 == 0:
+            print(f"  [{idx+1}/{len(paths)}] running mean MSE={np.mean(all_mse):.6f}")
+
+    mean_mse = float(np.mean(all_mse))
+    std_mse = float(np.std(all_mse))
+    print(f"\n  Mean MSE: {mean_mse:.6f} ± {std_mse:.6f} over {len(all_mse)} videos")
+    return mean_mse, std_mse, len(all_mse)
+
+
+# ──────────────────────────────────────────────────────────────
+# 2. Reconstruction demos (diverse)
+# ──────────────────────────────────────────────────────────────
+@torch.no_grad()
+def reconstruction_demos(vae, video_paths):
+    """Create original|reconstruction side-by-side GIFs."""
+    print(f"\n=== Reconstruction demos ({len(video_paths)} videos) ===")
+    font = get_font(11)
+
+    for i, (path, start, label) in enumerate(video_paths):
+        video_01 = load_video(path, max_frames=32, start_frame=start)
+        if video_01 is None:
+            print(f"  Skipping {path}")
+            continue
+        T = video_01.shape[0]
+        video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
+        mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
+        mean, _, _ = vae.encoder(video_t, mask4d, train=False)
+        recon = vae.decoder(mean, mask4d, train=False)
+        recon_np = np.clip(recon[0].float().cpu().numpy(), 0, 1)
+        mse = float(np.mean((video_01 - recon_np) ** 2))
+
+        labeled = hstack_videos([
+            label_video(video_01, "Original", font),
+            label_video(recon_np, f"Reconstruction (MSE={mse:.4f})", font),
+        ])
+        out_path = os.path.join(DOC_DIR, f"recon_video{i}.gif")
+        save_gif(labeled, out_path, fps=12)
+        shrink_gif(out_path)
+        print(f"  recon_video{i}.gif: {label}, MSE={mse:.6f}")
+
+
+# ──────────────────────────────────────────────────────────────
+# 3. Compression at different budgets (diverse, including high motion)
+# ──────────────────────────────────────────────────────────────
+@torch.no_grad()
+def compression_demos(vae, video_paths):
+    print(f"\n=== Compression demos ({len(video_paths)} videos) ===")
+    font = get_font(11)
+
+    for vi, (path, start, label) in enumerate(video_paths):
+        video_01 = load_video(path, max_frames=32, start_frame=start)
+        if video_01 is None:
+            continue
+        T = video_01.shape[0]
+        video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
+        mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
+
+        mean, _, selection_probs = vae.encoder(video_t, mask4d, train=False)
+        latent = mean
+        fill = vae.fill_token.to(torch.bfloat16)
+        sel = selection_probs.squeeze(-1).squeeze(0).float().cpu().numpy()
+
+        recon_all = vae.decoder(latent, mask4d, train=False)
+        recon_all_np = np.clip(recon_all[0].float().cpu().numpy(), 0, 1)
+        mse_all = float(np.mean((video_01 - recon_all_np) ** 2))
+
+        parts = [label_video(video_01, "Original", font),
+                 label_video(recon_all_np, f"All {T}f  MSE={mse_all:.4f}", font)]
+
+        for budget in [8, 4, 1]:
+            topk = np.sort(np.argsort(sel)[-budget:])
+            sm = torch.zeros(1, T, 1, 1, device=DEVICE, dtype=torch.bfloat16)
+            sm[0, topk, 0, 0] = 1.0
+            r = vae.decoder(latent * sm + fill * (1 - sm), mask4d, train=False)
+            r_np = np.clip(r[0].float().cpu().numpy(), 0, 1)
+            mse = float(np.mean((video_01 - r_np) ** 2))
+            parts.append(label_video(r_np, f"Top-{budget}  MSE={mse:.4f}", font))
+            print(f"  {label} top-{budget}: MSE={mse:.6f}")
+
+        composite = hstack_videos(parts, pad=2)
+        out_path = os.path.join(DOC_DIR, f"compress_video{vi}.gif")
+        save_gif(composite, out_path, fps=12)
+        shrink_gif(out_path)
+        print(f"  Saved compress_video{vi}.gif")
+
+
+# ──────────────────────────────────────────────────────────────
+# 4. Generation: 4x4 grid of diverse seeds
+# ──────────────────────────────────────────────────────────────
+@torch.no_grad()
+def generate_grid(dit, vae, num_latent=8):
+    print(f"\n=== Generating 4x4 grid ({num_latent} latent frames per video) ===")
+    font = get_font(10)
+    seeds = [0, 7, 13, 42, 55, 99, 123, 200, 256, 333, 404, 512, 700, 888, 1024, 1337]
+
+    rows = []  # list of 4-video rows
+    row_vids = []
+
+    for seed in seeds:
         torch.manual_seed(seed)
         noise = torch.randn(1, num_latent, 256, 96, device=DEVICE, dtype=torch.bfloat16)
         mask = torch.ones(1, num_latent, dtype=torch.bool, device=DEVICE)
         latent, gap_pred = sample(dit, noise, mask, num_steps=100)
-        positions, total = gaps_to_positions(gap_pred, mask)
+        _, total = gaps_to_positions(gap_pred, mask)
         t_out = int(total[0].item())
         gaps_int = gap_pred.float().round().long()
         gaps_int[:, 0] = gaps_int[:, 0].clamp(min=0)
@@ -131,166 +263,62 @@ def generate_videos(dit, vae, num_latent=8):
 
         video = vae.decompress(latent, None, gaps_int, mask,
                                train=False, output_length=t_out)
-        video_np = np.clip(video[0].float().cpu().numpy(), 0, 1)
-        gaps_str = ",".join(str(g) for g in gaps_int[0].tolist())
-        print(f"  seed={seed}: {num_latent} latent -> {t_out} frames, gaps=[{gaps_str}]")
+        v_np = np.clip(video[0].float().cpu().numpy(), 0, 1)
+        v_labeled = label_video(v_np, f"s={seed} ({t_out}f)", font)
+        row_vids.append(v_labeled)
+        print(f"  seed={seed:4d}: {t_out} frames, gaps={gaps_int[0].tolist()}")
 
-        save_gif(video_np, os.path.join(DOC_DIR, f"gen_seed{seed}.gif"), fps=12)
-        all_videos.append((video_np, seed, t_out, gaps_int[0].tolist()))
+        if len(row_vids) == 4:
+            rows.append(hstack_videos(row_vids, pad=2))
+            row_vids = []
 
-    # Side-by-side composite of 4 seeds (trim to shortest)
-    min_t = min(v[0].shape[0] for v in all_videos)
-    trimmed = [v[0][:min_t] for v in all_videos]
-    labeled = []
-    for v, (_, seed, t_out, gaps) in zip(trimmed, all_videos):
-        labeled.append(label_video(v, f"seed={seed} ({t_out}f)", font))
-    composite = hstack_videos(labeled, pad=2)
-    save_gif(composite, os.path.join(DOC_DIR, "generated_composite.gif"), fps=12)
-    print(f"  Saved generated_composite.gif ({min_t} frames)")
-    return all_videos
+    # Stack 4 rows vertically
+    composite = vstack_videos(rows, pad=2)
+    out_path = os.path.join(DOC_DIR, "generated_grid.gif")
+    save_gif(composite, out_path, fps=12)
+    shrink_gif(out_path, scale="iw*2/3", max_colors=64)
+    print(f"  Saved generated_grid.gif")
 
 
 # ──────────────────────────────────────────────────────────────
-# 2. Compress diverse real videos at different frame budgets
-# ──────────────────────────────────────────────────────────────
-@torch.no_grad()
-def compress_diverse_videos(vae, video_dir, max_frames=32):
-    print(f"\n=== Compression comparison on diverse videos ===")
-    font = get_font(11)
-
-    # Pick diverse videos (different categories)
-    all_paths = sorted(glob.glob(os.path.join(video_dir, "*.mp4")))
-    # Sample spread out through the directory for diversity
-    random.seed(42)
-    candidates = random.sample(all_paths, min(200, len(all_paths)))
-    # Pick the 3 most visually distinct (by filename prefix variation)
-    seen_prefixes = set()
-    picks = []
-    for p in candidates:
-        base = os.path.basename(p)
-        prefix = "_".join(base.split("_")[:4])
-        if prefix not in seen_prefixes:
-            seen_prefixes.add(prefix)
-            picks.append(p)
-        if len(picks) >= 3:
-            break
-
-    for vi, video_path in enumerate(picks):
-        basename = os.path.basename(video_path)[:60]
-        print(f"\n  Video {vi+1}: {basename}")
-        video_01 = load_video(video_path, max_frames=max_frames)
-        T = video_01.shape[0]
-
-        video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
-        mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
-
-        mean, _, selection_probs = vae.encoder(video_t, mask4d, train=False)
-        latent = mean
-        fill = vae.fill_token.to(torch.bfloat16)
-        sel = selection_probs.squeeze(-1).squeeze(0).float().cpu().numpy()
-
-        # All frames (baseline)
-        recon_all = vae.decoder(latent, mask4d, train=False)
-        recon_all_np = np.clip(recon_all[0].float().cpu().numpy(), 0, 1)
-        mse_all = float(np.mean((video_01 - recon_all_np) ** 2))
-
-        # Various budgets
-        recons = {"all": (recon_all_np, mse_all, T)}
-        for budget in [8, 4, 2, 1]:
-            topk_idx = np.sort(np.argsort(sel)[-budget:])
-            sel_mask = torch.zeros(1, T, 1, 1, device=DEVICE, dtype=torch.bfloat16)
-            sel_mask[0, topk_idx, 0, 0] = 1.0
-            compressed = latent * sel_mask + fill * (1 - sel_mask)
-            recon = vae.decoder(compressed, mask4d, train=False)
-            recon_np = np.clip(recon[0].float().cpu().numpy(), 0, 1)
-            mse = float(np.mean((video_01 - recon_np) ** 2))
-            recons[budget] = (recon_np, mse, budget)
-            print(f"    Top-{budget}: MSE={mse:.6f}")
-
-        print(f"    All {T}f: MSE={mse_all:.6f}")
-
-        # Build side-by-side GIF: original | all-frames | top-8 | top-4 | top-1
-        parts = [
-            (video_01, f"Original"),
-            (recons["all"][0], f"All {T}f MSE={mse_all:.4f}"),
-            (recons[8][0], f"Top-8 MSE={recons[8][1]:.4f}"),
-            (recons[4][0], f"Top-4 MSE={recons[4][1]:.4f}"),
-            (recons[1][0], f"Top-1 MSE={recons[1][1]:.4f}"),
-        ]
-        labeled = [label_video(v, lbl, font) for v, lbl in parts]
-        composite = hstack_videos(labeled, pad=2)
-        save_gif(composite, os.path.join(DOC_DIR, f"compress_video{vi}.gif"), fps=12)
-        print(f"    Saved compress_video{vi}.gif")
-
-
-# ──────────────────────────────────────────────────────────────
-# 3. Reconstruction quality on real videos
-# ──────────────────────────────────────────────────────────────
-@torch.no_grad()
-def evaluate_mse_and_recon(vae, video_dir, num_videos=50, max_frames=32):
-    print(f"\n=== Evaluating autoencoder MSE on {num_videos} real videos ===")
-    font = get_font(12)
-    paths = sorted(glob.glob(os.path.join(video_dir, "*.mp4")))[:num_videos]
-
-    all_mse = []
-    # Collect diverse samples for reconstruction demo
-    demo_pairs = []  # (video_01, recon_np, mse, name)
-
-    for idx, path in enumerate(paths):
-        video_01 = load_video(path, max_frames=max_frames)
-        T = video_01.shape[0]
-        if T < 2:
-            continue
-
-        video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
-        mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
-        mean, _, _ = vae.encoder(video_t, mask4d, train=False)
-        recon = vae.decoder(mean, mask4d, train=False)
-        recon_np = np.clip(recon[0].float().cpu().numpy(), 0, 1)
-
-        mse = float(np.mean((video_01 - recon_np) ** 2))
-        all_mse.append(mse)
-
-        # Keep first 3 diverse videos for demo
-        if len(demo_pairs) < 3:
-            name = os.path.basename(path)[:40]
-            demo_pairs.append((video_01, recon_np, mse, name))
-
-        if idx % 10 == 0:
-            print(f"  [{idx+1}/{len(paths)}] MSE={mse:.6f}")
-
-    mean_mse = float(np.mean(all_mse))
-    std_mse = float(np.std(all_mse))
-    print(f"\n  Mean MSE: {mean_mse:.6f} +/- {std_mse:.6f} over {len(all_mse)} videos")
-
-    # Save reconstruction demos as side-by-side GIFs
-    for i, (orig, recon, mse, name) in enumerate(demo_pairs):
-        labeled_orig = label_video(orig, "Original", font)
-        labeled_recon = label_video(recon, f"Reconstruction (MSE={mse:.4f})", font)
-        composite = hstack_videos([labeled_orig, labeled_recon], pad=2)
-        save_gif(composite, os.path.join(DOC_DIR, f"recon_video{i}.gif"), fps=12)
-        print(f"  Saved recon_video{i}.gif ({name})")
-
-    with open(os.path.join(DOC_DIR, "eval_results.txt"), "w") as f:
-        f.write(f"Mean MSE: {mean_mse:.6f}\n")
-        f.write(f"Std MSE: {std_mse:.6f}\n")
-        f.write(f"Num videos: {len(all_mse)}\n")
-
-    return mean_mse
-
-
 def main():
     os.makedirs(DOC_DIR, exist_ok=True)
 
     vae = load_vae()
     dit = load_dit()
 
-    generate_videos(dit, vae, num_latent=8)
+    # --- VAE results (main focus) ---
 
-    compress_diverse_videos(vae, "/mnt/t9/videos/videos1", max_frames=32)
+    # MSE on 600 videos
+    mean_mse, std_mse, n_vids = evaluate_mse(
+        vae, "/mnt/t9/videos/videos1", num_videos=600, max_frames=32)
 
-    evaluate_mse_and_recon(vae, "/mnt/t9/videos/videos1",
-                           num_videos=50, max_frames=32)
+    # Reconstruction demos: mix of training-set and high-motion test videos
+    recon_paths = [
+        ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-aerial-panorama-of-a-coast-and-its-reliefs-36615_000.mp4", 0, "aerial coast"),
+        ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-a-man-doing-jumping-tricks-at-the-beach-1222_001.mp4", 0, "beach jumping"),
+        ("/projects/video-VAE/inference/test_videos/videos0/videos0/9bZkp7q19f0.mp4", 100, "dance (high motion)"),
+        ("/projects/video-VAE/inference/test_videos/videos0/videos0/dQw4w9WgXcQ.mp4", 200, "music video (high motion)"),
+    ]
+    reconstruction_demos(vae, recon_paths)
+
+    # Compression demos: diverse + high motion
+    compress_paths = [
+        ("/mnt/t9/videos/videos1/pixabay_seascapes_videos_145647_012.mp4", 0, "seascape"),
+        ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-flying-over-a-palm-covered-beach-44364_000.mp4", 0, "palm beach aerial"),
+        ("/projects/video-VAE/inference/test_videos/videos0/videos0/9bZkp7q19f0.mp4", 300, "dance (high motion)"),
+        ("/projects/video-VAE/inference/test_videos/videos0/videos0/dQw4w9WgXcQ.mp4", 600, "music video (high motion)"),
+    ]
+    compression_demos(vae, compress_paths)
+
+    # --- DiT results ---
+    generate_grid(dit, vae, num_latent=8)
+
+    # Write eval summary
+    with open(os.path.join(DOC_DIR, "eval_results.txt"), "w") as f:
+        f.write(f"Mean MSE: {mean_mse:.6f}\n")
+        f.write(f"Std MSE: {std_mse:.6f}\n")
+        f.write(f"Num videos: {n_vids}\n")
 
     print("\n=== All done! ===")
     for fn in sorted(os.listdir(DOC_DIR)):

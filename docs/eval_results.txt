@@ -1,3 +1,3 @@
-Mean MSE: 0.002511
-Std MSE: 0.001962
-Num videos: 50
+Mean MSE: 0.002568
+Std MSE: 0.002945
+Num videos: 600
