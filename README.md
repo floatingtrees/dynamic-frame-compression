@@ -17,8 +17,13 @@ The VAE encodes 256x256 video into a compact latent (8x spatial compression: 768
 
 | Metric | Value |
 |--------|-------|
-| **Mean MSE** | **0.0026** |
-| Std MSE | 0.0029 |
+| **All-frames MSE** | **0.0026** |
+| **Bernoulli-sampled MSE** | **0.0025** |
+| Mean frame keep rate | 18.5% (5.9 / 32 frames) |
+| Average temporal compression | 5.4x |
+| Combined compression (spatial × temporal) | **43x** |
+
+The Bernoulli-sampled MSE uses the model's learned frame selection at inference time: each frame is independently kept or dropped based on the encoder's predicted importance score. The model learns to drop frames that are easy to reconstruct from context, so dropping frames barely hurts quality.
 
 ![Aerial coast](docs/recon_video0.gif)
 
@@ -30,9 +35,9 @@ The VAE encodes 256x256 video into a compact latent (8x spatial compression: 768
 
 ### Frame-Budget Compression
 
-The encoder assigns each frame an importance score. By keeping only the top-K frames and filling the rest with a learned token, the model compresses video at arbitrary temporal ratios on top of the 8x spatial compression.
+The encoder assigns each frame an importance score. We can keep only the top-K frames and fill the rest with a learned token, compressing at arbitrary temporal ratios on top of the 8x spatial compression.
 
-Shown: Original | All 32 frames | Top-8 | Top-4 | Top-1
+Shown on 16-frame clips: Original | All frames | Sampled (standard Bernoulli) | Top-8 | Top-4 | Top-1
 
 ![Seascape](docs/compress_video0.gif)
 
@@ -42,7 +47,7 @@ Shown: Original | All 32 frames | Top-8 | Top-4 | Top-1
 
 ![Music video — high motion](docs/compress_video3.gif)
 
-*High-motion videos (dance, music video) degrade more with fewer frames, as expected — temporal information is harder to reconstruct from a single keyframe.*
+*High-motion videos degrade more at aggressive frame budgets — temporal information is harder to hallucinate from a single keyframe.*
 
 ---
 
@@ -56,7 +61,7 @@ Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 
 ![4x4 generation grid](docs/generated_grid.gif)
 
-*16 seeds, 8 latent frames each. Labels show seed and output frame count (28–33 frames). The model generates diverse scenes: animals, water, landscapes, people, close-ups.*
+*16 seeds, 8 latent frames each. Labels show seed and output frame count (28–33 frames).*
 
 ---
 

@@ -1,3 +1,5 @@
-Mean MSE: 0.002568
-Std MSE: 0.002945
-Num videos: 600
+n: 600
+all_frames_mse: 0.0025680343096125095
+bernoulli_mse: 0.0025060615170999275
+keep_rate: 0.18494791666666666
+keep_rate_std: 0.10541181590865288

@@ -1,6 +1,7 @@
 """
 Evaluation script for README documentation.
-- Autoencoder reconstruction quality on 500+ real videos
+- Autoencoder reconstruction quality on 600+ real videos
+- Standard Bernoulli compression stats (average frame keep rate)
 - Compression at different frame budgets on diverse videos
 - Video generation from DiT with frame-gap prediction (4x4 grid)
 """
@@ -77,7 +78,6 @@ def save_gif(frames_01, path, fps=12):
 
 
 def shrink_gif(path, scale="iw*3/4", max_colors=64):
-    """Re-encode a GIF smaller via ffmpeg palette optimization."""
     tmp = path + ".tmp.gif"
     os.system(f'ffmpeg -y -i "{path}" -vf "fps=8,scale={scale}:-1:flags=lanczos,'
               f'split[s0][s1];[s0]palettegen=max_colors={max_colors}[p];'
@@ -130,14 +130,17 @@ def label_video(frames_01, text, font):
 
 
 # ──────────────────────────────────────────────────────────────
-# 1. MSE over 500+ real videos
+# 1. MSE + standard compression stats over 600+ videos
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
 def evaluate_mse(vae, video_dir, num_videos=600, max_frames=32):
-    print(f"\n=== Evaluating autoencoder MSE on {num_videos} videos ===")
+    print(f"\n=== Evaluating autoencoder on {num_videos} videos ===")
     paths = sorted(glob.glob(os.path.join(video_dir, "*.mp4")))[:num_videos]
 
     all_mse = []
+    all_keep_rates = []
+    all_bernoulli_mse = []
+
     for idx, path in enumerate(paths):
         video_01 = load_video(path, max_frames=max_frames)
         if video_01 is None or video_01.shape[0] < 2:
@@ -145,33 +148,69 @@ def evaluate_mse(vae, video_dir, num_videos=600, max_frames=32):
         T = video_01.shape[0]
         video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
         mask4d = torch.ones(1, 1, 1, T, dtype=torch.bool, device=DEVICE)
-        mean, _, _ = vae.encoder(video_t, mask4d, train=False)
+
+        mean, _, sel_probs = vae.encoder(video_t, mask4d, train=False)
+        fill = vae.fill_token.to(torch.bfloat16)
+
+        # All-frames reconstruction MSE
         recon = vae.decoder(mean, mask4d, train=False)
         recon_np = np.clip(recon[0].float().cpu().numpy(), 0, 1)
         mse = float(np.mean((video_01 - recon_np) ** 2))
         all_mse.append(mse)
-        if (idx + 1) % 100 == 0:
-            print(f"  [{idx+1}/{len(paths)}] running mean MSE={np.mean(all_mse):.6f}")
 
+        # Standard Bernoulli selection (matching training behavior)
+        sel = sel_probs.squeeze(-1).squeeze(0).float().cpu().numpy()  # (T,)
+        # Bernoulli sample (use fixed seed per video for reproducibility)
+        torch.manual_seed(idx)
+        sel_mask = torch.bernoulli(sel_probs.squeeze(-1)).to(torch.bfloat16)  # (1, T)
+        keep_rate = float(sel_mask.sum().item()) / T
+        all_keep_rates.append(keep_rate)
+
+        # Bernoulli reconstruction
+        sel_mask_4d = sel_mask.unsqueeze(-1).unsqueeze(-1)  # (1, T, 1, 1)
+        compressed = mean * sel_mask_4d + fill * (1 - sel_mask_4d)
+        recon_b = vae.decoder(compressed, mask4d, train=False)
+        recon_b_np = np.clip(recon_b[0].float().cpu().numpy(), 0, 1)
+        mse_b = float(np.mean((video_01 - recon_b_np) ** 2))
+        all_bernoulli_mse.append(mse_b)
+
+        if (idx + 1) % 100 == 0:
+            print(f"  [{idx+1}/{len(paths)}] all-frames MSE={np.mean(all_mse):.6f}, "
+                  f"Bernoulli MSE={np.mean(all_bernoulli_mse):.6f}, "
+                  f"keep rate={np.mean(all_keep_rates):.3f}")
+
+    n = len(all_mse)
     mean_mse = float(np.mean(all_mse))
-    std_mse = float(np.std(all_mse))
-    print(f"\n  Mean MSE: {mean_mse:.6f} ± {std_mse:.6f} over {len(all_mse)} videos")
-    return mean_mse, std_mse, len(all_mse)
+    mean_bernoulli_mse = float(np.mean(all_bernoulli_mse))
+    mean_keep = float(np.mean(all_keep_rates))
+    std_keep = float(np.std(all_keep_rates))
+    print(f"\n  Results over {n} videos:")
+    print(f"    All-frames MSE:    {mean_mse:.6f}")
+    print(f"    Bernoulli MSE:     {mean_bernoulli_mse:.6f}")
+    print(f"    Mean keep rate:    {mean_keep:.3f} ± {std_keep:.3f} "
+          f"({mean_keep*32:.1f}/{32} frames avg)")
+    print(f"    Temporal compress:  {1/mean_keep:.1f}x average")
+
+    return {
+        "n": n,
+        "all_frames_mse": mean_mse,
+        "bernoulli_mse": mean_bernoulli_mse,
+        "keep_rate": mean_keep,
+        "keep_rate_std": std_keep,
+    }
 
 
 # ──────────────────────────────────────────────────────────────
-# 2. Reconstruction demos (diverse)
+# 2. Reconstruction demos
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
 def reconstruction_demos(vae, video_paths):
-    """Create original|reconstruction side-by-side GIFs."""
     print(f"\n=== Reconstruction demos ({len(video_paths)} videos) ===")
     font = get_font(11)
 
     for i, (path, start, label) in enumerate(video_paths):
         video_01 = load_video(path, max_frames=32, start_frame=start)
         if video_01 is None:
-            print(f"  Skipping {path}")
             continue
         T = video_01.shape[0]
         video_t = torch.tensor(video_01, device=DEVICE, dtype=torch.bfloat16).unsqueeze(0)
@@ -192,15 +231,15 @@ def reconstruction_demos(vae, video_paths):
 
 
 # ──────────────────────────────────────────────────────────────
-# 3. Compression at different budgets (diverse, including high motion)
+# 3. Compression demos with standard Bernoulli mode
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
-def compression_demos(vae, video_paths):
-    print(f"\n=== Compression demos ({len(video_paths)} videos) ===")
-    font = get_font(11)
+def compression_demos(vae, video_paths, max_frames=16):
+    print(f"\n=== Compression demos ({len(video_paths)} videos, {max_frames} frames) ===")
+    font = get_font(10)
 
     for vi, (path, start, label) in enumerate(video_paths):
-        video_01 = load_video(path, max_frames=32, start_frame=start)
+        video_01 = load_video(path, max_frames=max_frames, start_frame=start)
         if video_01 is None:
             continue
         T = video_01.shape[0]
@@ -212,13 +251,28 @@ def compression_demos(vae, video_paths):
         fill = vae.fill_token.to(torch.bfloat16)
         sel = selection_probs.squeeze(-1).squeeze(0).float().cpu().numpy()
 
+        # All frames
         recon_all = vae.decoder(latent, mask4d, train=False)
         recon_all_np = np.clip(recon_all[0].float().cpu().numpy(), 0, 1)
         mse_all = float(np.mean((video_01 - recon_all_np) ** 2))
 
-        parts = [label_video(video_01, "Original", font),
-                 label_video(recon_all_np, f"All {T}f  MSE={mse_all:.4f}", font)]
+        # Standard Bernoulli (training-time behavior)
+        torch.manual_seed(vi * 1000)
+        sel_mask_b = torch.bernoulli(selection_probs.squeeze(-1)).to(torch.bfloat16)
+        kept_b = int(sel_mask_b.sum().item())
+        sel_mask_b4 = sel_mask_b.unsqueeze(-1).unsqueeze(-1)
+        compressed_b = latent * sel_mask_b4 + fill * (1 - sel_mask_b4)
+        recon_b = vae.decoder(compressed_b, mask4d, train=False)
+        recon_b_np = np.clip(recon_b[0].float().cpu().numpy(), 0, 1)
+        mse_b = float(np.mean((video_01 - recon_b_np) ** 2))
 
+        parts = [
+            label_video(video_01, "Original", font),
+            label_video(recon_all_np, f"All {T}f MSE={mse_all:.4f}", font),
+            label_video(recon_b_np, f"Sampled {kept_b}f MSE={mse_b:.4f}", font),
+        ]
+
+        # Argmax budgets
         for budget in [8, 4, 1]:
             topk = np.sort(np.argsort(sel)[-budget:])
             sm = torch.zeros(1, T, 1, 1, device=DEVICE, dtype=torch.bfloat16)
@@ -226,18 +280,17 @@ def compression_demos(vae, video_paths):
             r = vae.decoder(latent * sm + fill * (1 - sm), mask4d, train=False)
             r_np = np.clip(r[0].float().cpu().numpy(), 0, 1)
             mse = float(np.mean((video_01 - r_np) ** 2))
-            parts.append(label_video(r_np, f"Top-{budget}  MSE={mse:.4f}", font))
-            print(f"  {label} top-{budget}: MSE={mse:.6f}")
+            parts.append(label_video(r_np, f"Top-{budget} MSE={mse:.4f}", font))
 
         composite = hstack_videos(parts, pad=2)
         out_path = os.path.join(DOC_DIR, f"compress_video{vi}.gif")
         save_gif(composite, out_path, fps=12)
         shrink_gif(out_path)
-        print(f"  Saved compress_video{vi}.gif")
+        print(f"  compress_video{vi}.gif: {label}, Bernoulli kept={kept_b}/{T}")
 
 
 # ──────────────────────────────────────────────────────────────
-# 4. Generation: 4x4 grid of diverse seeds
+# 4. Generation: 4x4 grid
 # ──────────────────────────────────────────────────────────────
 @torch.no_grad()
 def generate_grid(dit, vae, num_latent=8):
@@ -245,7 +298,7 @@ def generate_grid(dit, vae, num_latent=8):
     font = get_font(10)
     seeds = [0, 7, 13, 42, 55, 99, 123, 200, 256, 333, 404, 512, 700, 888, 1024, 1337]
 
-    rows = []  # list of 4-video rows
+    rows = []
     row_vids = []
 
     for seed in seeds:
@@ -266,13 +319,12 @@ def generate_grid(dit, vae, num_latent=8):
         v_np = np.clip(video[0].float().cpu().numpy(), 0, 1)
         v_labeled = label_video(v_np, f"s={seed} ({t_out}f)", font)
         row_vids.append(v_labeled)
-        print(f"  seed={seed:4d}: {t_out} frames, gaps={gaps_int[0].tolist()}")
+        print(f"  seed={seed:4d}: {t_out} frames")
 
         if len(row_vids) == 4:
             rows.append(hstack_videos(row_vids, pad=2))
             row_vids = []
 
-    # Stack 4 rows vertically
     composite = vstack_videos(rows, pad=2)
     out_path = os.path.join(DOC_DIR, "generated_grid.gif")
     save_gif(composite, out_path, fps=12)
@@ -287,13 +339,9 @@ def main():
     vae = load_vae()
     dit = load_dit()
 
-    # --- VAE results (main focus) ---
+    # --- VAE ---
+    stats = evaluate_mse(vae, "/mnt/t9/videos/videos1", num_videos=600, max_frames=32)
 
-    # MSE on 600 videos
-    mean_mse, std_mse, n_vids = evaluate_mse(
-        vae, "/mnt/t9/videos/videos1", num_videos=600, max_frames=32)
-
-    # Reconstruction demos: mix of training-set and high-motion test videos
     recon_paths = [
         ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-aerial-panorama-of-a-coast-and-its-reliefs-36615_000.mp4", 0, "aerial coast"),
         ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-a-man-doing-jumping-tricks-at-the-beach-1222_001.mp4", 0, "beach jumping"),
@@ -302,23 +350,21 @@ def main():
     ]
     reconstruction_demos(vae, recon_paths)
 
-    # Compression demos: diverse + high motion
     compress_paths = [
         ("/mnt/t9/videos/videos1/pixabay_seascapes_videos_145647_012.mp4", 0, "seascape"),
         ("/mnt/t9/videos/videos1/mixkit_beach_mixkit-flying-over-a-palm-covered-beach-44364_000.mp4", 0, "palm beach aerial"),
         ("/projects/video-VAE/inference/test_videos/videos0/videos0/9bZkp7q19f0.mp4", 300, "dance (high motion)"),
         ("/projects/video-VAE/inference/test_videos/videos0/videos0/dQw4w9WgXcQ.mp4", 600, "music video (high motion)"),
     ]
-    compression_demos(vae, compress_paths)
+    compression_demos(vae, compress_paths, max_frames=16)
 
-    # --- DiT results ---
+    # --- DiT ---
     generate_grid(dit, vae, num_latent=8)
 
-    # Write eval summary
+    # Write summary
     with open(os.path.join(DOC_DIR, "eval_results.txt"), "w") as f:
-        f.write(f"Mean MSE: {mean_mse:.6f}\n")
-        f.write(f"Std MSE: {std_mse:.6f}\n")
-        f.write(f"Num videos: {n_vids}\n")
+        for k, v in stats.items():
+            f.write(f"{k}: {v}\n")
 
     print("\n=== All done! ===")
     for fn in sorted(os.listdir(DOC_DIR)):
