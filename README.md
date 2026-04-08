@@ -7,7 +7,7 @@ PyTorch port of a JAX/Flax video generation and compression system combining a *
 
 All inference runs in **bfloat16**. Both models were trained for 10 days on 32 Google TPU v6e chips.
 
-**NOTE: Most of the code and documentation was ported from JAX to PyTorch by Claude. Code correctness has been verified through a large number of tests, and documentation correctness has been manually verified as well.**
+**NOTE: Most of the code and documentation was ported from JAX to PyTorch by an LLM. Code correctness has been verified through a large number of tests, and documentation correctness has been manually verified as well.**
 
 ---
 
@@ -57,7 +57,7 @@ Shown on 32-frame clips: Original | Top-16 | Top-8 | Top-4 | Top-1
 
 ### Video Generation with Frame Gap Prediction
 
-The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is placed at its predicted position; the VAE fills gaps with a learned token. Output length = `sum(predicted_gaps)`. This DiT was heavily undertrained (~8000 TPU v6e hours and 200 million frames), so it serves as a proof of concept that the VAE can create useful latent spaces. 
+The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is placed at its predicted position; the VAE fills gaps with a learned token. Output length = `sum(predicted_gaps)`. This DiT was heavily undertrained (~8000 TPU v6e hours and 100 million frames), so it serves as a proof of concept that the VAE latent space can efficiently train diffusion/flow matching models. 
 
 Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 
