@@ -67,25 +67,6 @@ Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 
 ---
 
-## Architecture
-
-### Video VAE
-- **Encoder**: 16x16 PatchEmbed → 9 FactoredAttention layers → spatial compression (768→96) + frame selection head
-- **Decoder**: Spatial decompression (96→768) → 12 FactoredAttention layers → PatchUnEmbed + 3D UNet refinement
-- **FactoredAttention**: Temporal attention+MLP, then spatial attention+MLP, with RoPE and QK-norm
-- **Frame selection**: Learned per-frame importance; unselected frames replaced by a learned fill token
-
-### Video DiT
-- 30 FactoredAttention layers, residual_dim=1024
-- Flow matching with Euler integration (continuous timesteps [0,1])
-- **Dual-head output**: velocity field (denoising) + frame gaps (temporal spacing)
-- Gaps determine output length — no trailing blank frames
-
-### 3D UNet (Decoder Refinement)
-- 3-level encoder-decoder with skip connections and 3D convolutions
-
----
-
 ## Setup
 
 ```bash
@@ -141,6 +122,27 @@ decompress.py          # Video decompression
 evaluate.py            # Evaluation & doc generation
 test_jax_vs_pytorch.py # Correctness tests
 ```
+
+---
+
+## Architecture
+
+### Video VAE
+- **Encoder**: 16x16 PatchEmbed → 9 FactoredAttention layers → spatial compression (768→96) + frame selection head
+- **Decoder**: Spatial decompression (96→768) → 12 FactoredAttention layers → PatchUnEmbed + 3D UNet refinement
+- **FactoredAttention**: Temporal attention+MLP, then spatial attention+MLP, with RoPE and QK-norm
+- **Frame selection**: Learned per-frame importance; unselected frames replaced by a learned fill token
+
+### Video DiT
+- 30 FactoredAttention layers, residual_dim=1024
+- Flow matching with Euler integration (continuous timesteps [0,1])
+- **Dual-head output**: velocity field (denoising) + frame gaps (temporal spacing)
+- Gaps determine output length — no trailing blank frames
+
+### 3D UNet (Decoder Refinement)
+- 3-level encoder-decoder with skip connections and 3D convolutions
+
+---
 
 ## License
 
