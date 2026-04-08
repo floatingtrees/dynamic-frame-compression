@@ -7,13 +7,15 @@ PyTorch port of a JAX/Flax video generation and compression system combining a *
 
 All inference runs in **bfloat16**. Both models were trained for 10 days on 32 Google TPU v6e chips.
 
+**NOTE: Most of the code and documentation was ported from JAX to PyTorch by Claude. Code correctness has been verified through a large number of tests, and documentation correctness has been manually verified as well.**
+
 ---
 
 ## VAE Results
 
 ### Reconstruction Quality
 
-The VAE encodes 256x256 video into a compact latent (8x spatial compression: 768→96 channels per patch) and reconstructs it. Averaged over **600 real videos**:
+The VAE encodes 256x256 video into a compact latent (8x spatial compression: 768→96 channels per patch) and reconstructs it:
 
 | Metric | Value |
 |--------|-------|
@@ -55,7 +57,7 @@ Shown on 32-frame clips: Original | Top-16 | Top-8 | Top-4 | Top-1
 
 ### Video Generation with Frame Gap Prediction
 
-The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is placed at its predicted position; the VAE fills gaps with a learned token. Output length = `sum(predicted_gaps)`.
+The DiT generates compressed latent frames **and** predicts the temporal spacing between them. Each latent frame is placed at its predicted position; the VAE fills gaps with a learned token. Output length = `sum(predicted_gaps)`. This DiT was heavily undertrained (~8000 TPU v6e hours and 200 million frames), so it serves as a proof of concept that the VAE can create useful latent spaces. 
 
 Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 
@@ -101,15 +103,6 @@ Pre-trained weights are hosted on HuggingFace and **downloaded automatically** t
 
 - [`floatingtrees2/dynamic-frame-compression`](https://huggingface.co/floatingtrees2/dynamic-frame-compression) — `vae_pytorch.pt` (652 MB), `dit_pytorch.pt` (1.9 GB)
 
-To convert from JAX/Orbax checkpoints manually:
-
-```bash
-python convert_weights.py --model vae \
-    --jax_checkpoint /path/to/vae_checkpoint --output vae_pytorch.pt
-python convert_weights.py --model dit \
-    --jax_checkpoint /path/to/dit_checkpoint --output dit_pytorch.pt
-```
-
 ---
 
 ## Usage
@@ -132,28 +125,6 @@ python decompress.py --input compressed.pt --output reconstructed.mp4
 ```bash
 python evaluate.py  # regenerates all docs/ assets
 ```
-
----
-
-## Correctness
-
-All outputs match JAX within **1e-3** (TF32 disabled):
-
-```
-NVIDIA_TF32_OVERRIDE=0 python test_jax_vs_pytorch.py
-```
-
-| Test | Max Diff |
-|------|----------|
-| VAE Encoder | 2.1e-05 |
-| VAE Decoder | 4.2e-07 |
-| DiT Forward (30 layers) | 1.6e-05 |
-| DiT Sampling (100 steps) | 8.9e-04 |
-| Full Pipeline | 1.3e-04 |
-
-Key details: LayerNorm/GroupNorm eps=1e-6, ConvTranspose3d kernel flip, model uses [0,1] pixel range.
-
----
 
 ## File Structure
 
