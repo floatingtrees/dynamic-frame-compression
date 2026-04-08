@@ -11,16 +11,7 @@ import numpy as np
 import torch
 import imageio
 
-from autoencoder import VideoVAE
-
-
-def load_vae(checkpoint_path: str, device: str = "cuda") -> VideoVAE:
-    model = VideoVAE()
-    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    model.load_state_dict(state_dict, strict=False)
-    model = model.to(device=device, dtype=torch.bfloat16)
-    model.eval()
-    return model
+from model_loader import load_vae
 
 
 def save_video(frames: np.ndarray, output_path: str, fps: float = 30.0):
@@ -78,7 +69,6 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
-    print(f"Loading VAE from {args.vae_checkpoint}...")
     vae = load_vae(args.vae_checkpoint, args.device)
 
     print(f"Loading compressed data from {args.input}...")

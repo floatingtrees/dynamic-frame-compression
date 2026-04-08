@@ -89,22 +89,25 @@ Example: 8 latent frames with gaps `[2,6,6,3,5,2,2,4]` → 31 output frames.
 ```bash
 python3 -m venv venv && source venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-pip install einops imageio imageio-ffmpeg pillow
+pip install einops imageio imageio-ffmpeg pillow huggingface_hub
 
 # Optional: JAX comparison tests
 pip install "jax[cuda12]" "flax==0.10.4" optax orbax-checkpoint beartype jaxtyping
 ```
 
-### Weight Conversion
+### Weights
+
+Pre-trained weights are hosted on HuggingFace and **downloaded automatically** the first time you run `generate.py`, `compress.py`, or `decompress.py`:
+
+- [`floatingtrees2/dynamic-frame-compression`](https://huggingface.co/floatingtrees2/dynamic-frame-compression) — `vae_pytorch.pt` (652 MB), `dit_pytorch.pt` (1.9 GB)
+
+To convert from JAX/Orbax checkpoints manually:
 
 ```bash
 python convert_weights.py --model vae \
-    --jax_checkpoint /mnt/t9/vae_longterm_saves/gcs2/checkpoint_step_290000 \
-    --output vae_pytorch.pt
-
+    --jax_checkpoint /path/to/vae_checkpoint --output vae_pytorch.pt
 python convert_weights.py --model dit \
-    --jax_checkpoint /mnt/t9/DiT_longterm_saves/midpoint_save/checkpoint_step_250000_master \
-    --output dit_pytorch.pt
+    --jax_checkpoint /path/to/dit_checkpoint --output dit_pytorch.pt
 ```
 
 ---
@@ -159,6 +162,7 @@ layers.py              # Attention, MLP, FactoredAttention, RoPE, PatchEmbed
 unet.py                # 3D UNet
 autoencoder.py         # VideoVAE: Encoder, Decoder, compress/decompress
 diffusion_model.py     # VideoDiT, Euler sampling, gaps_to_positions
+model_loader.py        # Auto-download weights from HuggingFace
 convert_weights.py     # JAX Orbax → PyTorch conversion
 generate.py            # Generation with frame gap prediction
 compress.py            # Video compression

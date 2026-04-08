@@ -14,28 +14,12 @@ import torch
 import imageio.v2 as imageio
 from PIL import Image, ImageDraw, ImageFont
 
-from autoencoder import VideoVAE
-from diffusion_model import VideoDiT, sample, gaps_to_positions
+from diffusion_model import sample, gaps_to_positions
+from model_loader import load_vae, load_dit
 
 
 DEVICE = "cuda"
 DOC_DIR = "docs"
-
-
-def load_vae(path="vae_pytorch.pt"):
-    model = VideoVAE()
-    model.load_state_dict(
-        torch.load(path, map_location="cpu", weights_only=True), strict=False)
-    model.to(device=DEVICE, dtype=torch.bfloat16).eval()
-    return model
-
-
-def load_dit(path="dit_pytorch.pt"):
-    model = VideoDiT(depth=30)
-    model.load_state_dict(
-        torch.load(path, map_location="cpu", weights_only=True), strict=False)
-    model.to(device=DEVICE, dtype=torch.bfloat16).eval()
-    return model
 
 
 def to_uint8(x):

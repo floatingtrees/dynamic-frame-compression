@@ -17,28 +17,8 @@ import numpy as np
 import torch
 import imageio
 
-from autoencoder import VideoVAE
-from diffusion_model import VideoDiT, sample, gaps_to_positions
-
-
-def load_vae(checkpoint_path: str, device: str = "cuda") -> VideoVAE:
-    """Load the VAE model with converted PyTorch weights in bfloat16."""
-    model = VideoVAE()
-    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    model.load_state_dict(state_dict, strict=False)
-    model = model.to(device=device, dtype=torch.bfloat16)
-    model.eval()
-    return model
-
-
-def load_dit(checkpoint_path: str, device: str = "cuda") -> VideoDiT:
-    """Load the DiT model with converted PyTorch weights in bfloat16."""
-    model = VideoDiT(depth=30)
-    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    model.load_state_dict(state_dict, strict=False)
-    model = model.to(device=device, dtype=torch.bfloat16)
-    model.eval()
-    return model
+from diffusion_model import sample, gaps_to_positions
+from model_loader import load_vae, load_dit
 
 
 def save_video(frames: np.ndarray, output_path: str, fps: float = 30.0):
@@ -65,7 +45,7 @@ def save_frames(frames: np.ndarray, output_dir: str):
 
 
 @torch.no_grad()
-def generate(dit: VideoDiT, vae: VideoVAE, num_latent_frames: int = 16,
+def generate(dit, vae, num_latent_frames: int = 16,
              num_steps: int = 100, seed: int = 42,
              device: str = "cuda") -> np.ndarray:
     """
@@ -152,10 +132,7 @@ def main():
                         help="Device (cuda or cpu)")
     args = parser.parse_args()
 
-    print(f"Loading VAE from {args.vae_checkpoint}...")
     vae = load_vae(args.vae_checkpoint, args.device)
-
-    print(f"Loading DiT from {args.dit_checkpoint}...")
     dit = load_dit(args.dit_checkpoint, args.device)
 
     video = generate(dit, vae, num_latent_frames=args.num_latent_frames,
