@@ -7,7 +7,7 @@ PyTorch port of a JAX/Flax video generation and compression system combining a *
 
 All inference runs in **bfloat16**. Both models were trained for 10 days on 32 Google TPU v6e chips.
 
-**NOTE: Most of the code and documentation was ported from JAX to PyTorch by an LLM. Code correctness has been verified through a large number of tests, and documentation correctness has been manually verified as well.**
+**NOTE: Most of the code and documentation was ported from JAX to PyTorch by an LLM. Code correctness has been verified through a large number of tests, and documentation correctness has been manually verified and edited.**
 
 ---
 
