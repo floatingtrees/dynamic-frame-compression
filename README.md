@@ -51,6 +51,33 @@ Shown on 32-frame clips: Original | Top-16 | Top-8 | Top-4 | Top-1
 
 *High-motion videos degrade more at aggressive frame budgets — temporal information is harder to hallucinate from a single keyframe.*
 
+### Bernoulli Compression Rates by Motion
+
+Each frame is independently kept with probability equal to its predicted importance score. Rates below are the mean over 16 Bernoulli draws per clip (`±` is the std across draws). Clip filenames include the frame count, e.g. `bernoulli_slow_seascape_static_32f.gif`.
+
+| Motion | Clip | Frames | Kept frames | Keep rate | Compression | MSE |
+|--------|------|-------:|:-----------:|----------:|------------:|-------:|
+| slow   | aerial coastline pan     | 32 | 9.2 ± 1.3  | 28.7% | 3.5x  | 0.0097 |
+| slow   | tropical island aerial   | 32 | 3.2 ± 1.3  | 10.0% | 10.0x | 0.0011 |
+| slow   | seascape (static)        | 32 | 12.4 ± 1.3 | 38.7% | 2.6x  | 0.0024 |
+| fast   | beach jumping tricks     | 32 | 7.2 ± 1.0  | 22.7% | 4.4x  | 0.0028 |
+| fast   | dance performance        | 32 | 2.6 ± 0.9  |  8.0% | 12.5x | 0.0006 |
+| fast   | music video              | 32 | 5.6 ± 0.9  | 17.4% | 5.8x  | 0.0016 |
+
+![Slow — aerial coastline pan (32 frames)](docs/bernoulli_slow_aerial_coastline_pan_32f.gif)
+
+![Slow — tropical island aerial (32 frames)](docs/bernoulli_slow_tropical_island_aerial_32f.gif)
+
+![Slow — seascape, static (32 frames)](docs/bernoulli_slow_seascape_static_32f.gif)
+
+![Fast — beach jumping tricks (32 frames)](docs/bernoulli_fast_beach_jumping_tricks_32f.gif)
+
+![Fast — dance performance (32 frames)](docs/bernoulli_fast_dance_performance_32f.gif)
+
+![Fast — music video (32 frames)](docs/bernoulli_fast_music_video_32f.gif)
+
+Compression rate is not a monotonic function of motion class — the model keeps frames it needs for faithful reconstruction, not simply frames with high motion. Repetitive high-motion clips (dance, music video) can compress more aggressively than a slowly-panning landscape, because the repeating structure is predictable from a few keyframes. The static seascape is actually the *least* compressed here because its subtle wave texture is hard to reconstruct from a single fill token.
+
 ---
 
 ## DiT Results
